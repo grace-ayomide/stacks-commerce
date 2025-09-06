@@ -316,3 +316,64 @@
     )
   )
 )
+
+;; COMMUNITY REPUTATION SYSTEM
+
+;; Submit product review and rating
+(define-public (add-review
+    (product-id uint)
+    (rating uint)
+    (comment (string-ascii 200))
+  )
+  (let ((product-validation (unwrap! (map-get? Products product-id) ERR_PRODUCT_NOT_FOUND)))
+    (if (<= rating u5)
+      (ok (map-set Reviews {
+        product-id: product-id,
+        reviewer: tx-sender,
+      } {
+        rating: rating,
+        comment: comment,
+        timestamp: stacks-block-height,
+      }))
+      ERR_INVALID_RATING
+    )
+  )
+)
+
+;; PUBLIC DATA ACCESS INTERFACE
+
+;; Retrieve product information
+(define-read-only (get-product (product-id uint))
+  (ok (map-get? Products product-id))
+)
+
+;; Retrieve brand information
+(define-read-only (get-brand (brand principal))
+  (ok (map-get? Brands brand))
+)
+
+;; Retrieve specific review
+(define-read-only (get-review
+    (product-id uint)
+    (reviewer principal)
+  )
+  (ok (map-get? Reviews {
+    product-id: product-id,
+    reviewer: reviewer,
+  }))
+)
+
+;; Retrieve auction state
+(define-read-only (get-auction (product-id uint))
+  (ok (map-get? Auctions product-id))
+)
+
+;; Get current platform fee
+(define-read-only (get-platform-fee)
+  (ok (var-get platform-fee))
+)
+
+;; Get total products listed
+(define-read-only (get-product-count)
+  (ok (var-get product-counter))
+)
