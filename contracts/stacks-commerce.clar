@@ -98,3 +98,126 @@
     timestamp: uint,
   }
 )
+
+;; BRAND MANAGEMENT SYSTEM
+
+;; Register a new merchant brand in the marketplace
+(define-public (register-brand (name (string-ascii 50)))
+  (let ((brand-profile {
+      name: name,
+      verified: false,
+      created-at: stacks-block-height,
+    }))
+    (ok (map-set Brands tx-sender brand-profile))
+  )
+)
+
+;; Protocol-level brand verification (admin function)
+(define-public (verify-brand (brand principal))
+  (if (is-eq tx-sender CONTRACT_OWNER)
+    (let ((existing-brand (unwrap! (map-get? Brands brand) ERR_INVALID_BRAND_OWNER)))
+      (ok (map-set Brands brand (merge existing-brand { verified: true })))
+    )
+    ERR_UNAUTHORIZED
+  )
+)
+
+;; DIRECT SALES COMMERCE ENGINE
+
+;; Create a new product listing for immediate purchase
+(define-public (list-product
+    (name (string-ascii 100))
+    (description (string-ascii 500))
+    (price uint)
+  )
+  (let (
+      (brand-check (unwrap! (map-get? Brands tx-sender) ERR_INVALID_BRAND_OWNER))
+      (product-id (+ (var-get product-counter) u1))
+    )
+    (if (> price u0)
+      (begin
+        (var-set product-counter product-id)
+        (ok (map-set Products product-id {
+          brand: tx-sender,
+          name: name,
+          description: description,
+          price: price,
+          available: true,
+          created-at: stacks-block-height,
+          is-auction: false,
+        }))
+      )
+      ERR_INVALID_PRICING
+    )
+  )
+)
+
+;; Execute instant purchase with automatic fee distribution
+(define-public (purchase-product (product-id uint))
+  (let (
+      (product (unwrap! (map-get? Products product-id) ERR_PRODUCT_NOT_FOUND))
+      (total-price (get price product))
+      (merchant (get brand product))
+      (platform-fee-amount (/ (* total-price (var-get platform-fee)) u1000))
+    )
+    (if (and
+        (get available product)
+        (not (get is-auction product))
+        (>= (stx-get-balance tx-sender) total-price)
+      )
+
+      (let (
+          (fee-payment (stx-transfer? platform-fee-amount tx-sender CONTRACT_OWNER))
+          (merchant-payment (stx-transfer? (- total-price platform-fee-amount) tx-sender merchant))
+        )
+        (if (and (is-ok fee-payment) (is-ok merchant-payment))
+          (ok (map-set Products product-id (merge product { available: false })))
+          ERR_TRANSFER_FAILED
+        )
+      )
+      ERR_INSUFFICIENT_BALANCE
+    )
+  )
+)
+
+;; COMPETITIVE AUCTION SYSTEM
+
+;; Launch a time-bound auction for competitive bidding
+(define-public (create-auction
+    (name (string-ascii 100))
+    (description (string-ascii 500))
+    (min-price uint)
+    (duration uint)
+  )
+  (let (
+      (brand-verification (unwrap! (map-get? Brands tx-sender) ERR_INVALID_BRAND_OWNER))
+      (product-id (+ (var-get product-counter) u1))
+      (auction-end (+ stacks-block-height duration))
+    )
+    (if (and (>= duration u10) (> min-price u0))
+      (begin
+        (var-set product-counter product-id)
+        (map-set Products product-id {
+          brand: tx-sender,
+          name: name,
+          description: description,
+          price: min-price,
+          available: true,
+          created-at: stacks-block-height,
+          is-auction: true,
+        })
+        (ok (map-set Auctions product-id {
+          end-block: auction-end,
+          min-price: min-price,
+          highest-bid: u0,
+          highest-bidder: none,
+          is-active: true,
+        }))
+      )
+      (if (< duration u10)
+        ERR_INVALID_DURATION
+        ERR_INVALID_PRICING
+      )
+    )
+  )
+)
