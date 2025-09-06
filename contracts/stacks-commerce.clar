@@ -221,3 +221,98 @@
     )
   )
 )
+
+;; Submit competitive bid with automatic escrow
+(define-public (place-bid
+    (product-id uint)
+    (bid-amount uint)
+  )
+  (let (
+      (product (unwrap! (map-get? Products product-id) ERR_PRODUCT_NOT_FOUND))
+      (auction (unwrap! (map-get? Auctions product-id) ERR_NO_ACTIVE_AUCTION))
+    )
+    (if (and
+        (get is-active auction)
+        (<= stacks-block-height (get end-block auction))
+        (>= bid-amount (get min-price auction))
+        (> bid-amount (get highest-bid auction))
+        (>= (stx-get-balance tx-sender) bid-amount)
+      )
+
+      (let (
+          (refund-previous (match (get highest-bidder auction)
+            previous-bidder (stx-transfer? (get highest-bid auction) CONTRACT_OWNER
+              previous-bidder
+            )
+            (ok true)
+          ))
+          (escrow-bid (stx-transfer? bid-amount tx-sender CONTRACT_OWNER))
+        )
+        (if (and (is-ok refund-previous) (is-ok escrow-bid))
+          (ok (map-set Auctions product-id
+            (merge auction {
+              highest-bid: bid-amount,
+              highest-bidder: (some tx-sender),
+            })
+          ))
+          ERR_TRANSFER_FAILED
+        )
+      )
+
+      ;; Error handling with proper precedence
+      (if (not (get is-active auction))
+        ERR_AUCTION_EXPIRED
+        (if (> stacks-block-height (get end-block auction))
+          ERR_AUCTION_EXPIRED
+          (if (< bid-amount (get min-price auction))
+            ERR_BID_TOO_LOW
+            (if (<= bid-amount (get highest-bid auction))
+              ERR_BID_TOO_LOW
+              ERR_INSUFFICIENT_BALANCE
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Finalize auction with winner settlement
+(define-public (end-auction (product-id uint))
+  (let (
+      (product (unwrap! (map-get? Products product-id) ERR_PRODUCT_NOT_FOUND))
+      (auction (unwrap! (map-get? Auctions product-id) ERR_NO_ACTIVE_AUCTION))
+      (merchant (get brand product))
+    )
+    (if (and
+        (get is-active auction)
+        (>= stacks-block-height (get end-block auction))
+      )
+
+      (match (get highest-bidder auction)
+        winner (let (
+            (winning-bid (get highest-bid auction))
+            (platform-fee-amount (/ (* winning-bid (var-get platform-fee)) u1000))
+            (fee-collection (stx-transfer? platform-fee-amount CONTRACT_OWNER CONTRACT_OWNER))
+            (merchant-settlement (stx-transfer? (- winning-bid platform-fee-amount) CONTRACT_OWNER
+              merchant
+            ))
+          )
+          (if (and (is-ok fee-collection) (is-ok merchant-settlement))
+            (begin
+              (map-set Products product-id (merge product { available: false }))
+              (ok (map-set Auctions product-id (merge auction { is-active: false })))
+            )
+            ERR_TRANSFER_FAILED
+          )
+        )
+        ERR_NO_ACTIVE_AUCTION
+      )
+
+      (if (not (get is-active auction))
+        ERR_AUCTION_EXPIRED
+        ERR_AUCTION_EXPIRED
+      )
+    )
+  )
+)
